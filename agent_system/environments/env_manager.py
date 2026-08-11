@@ -339,6 +339,70 @@ class SokobanEnvironmentManager(EnvironmentManagerBase):
         return postprocess_text_obs
 
 
+class BabyAIEnvironmentManager(EnvironmentManagerBase):
+    def __init__(self, envs, projection_f, config):
+        self.memory = SimpleMemory()
+        super().__init__(envs, projection_f, config)
+
+    def reset(self, kwargs):
+        text_obs, infos = self.envs.reset()
+        self.missions = [info['mission'] for info in infos]
+        self.memory.reset(batch_size=len(text_obs))
+        self.pre_text_obs = text_obs
+
+        full_text_obs = self.build_text_obs(text_obs, init=True)
+        return {'text': full_text_obs, 'image': None, 'anchor': text_obs}, infos
+
+    def step(self, text_actions: List[str]):
+        actions, valids = self.projection_f(text_actions)
+        next_obs, rewards, dones, infos = self.envs.step(actions)
+
+        # infos[i]['action'] is the executed action name parsed by the env.
+        self.memory.store({'text_obs': self.pre_text_obs, 'action': [info['action'] for info in infos]})
+        self.pre_text_obs = next_obs
+
+        full_text_obs = self.build_text_obs(next_obs)
+
+        # add action_valid to infos
+        for i, info in enumerate(infos):
+            info['is_action_valid'] = to_numpy(valids[i])
+
+        next_observations = {'text': full_text_obs, 'image': None, 'anchor': next_obs}
+        rewards = to_numpy(rewards)
+        dones = to_numpy(dones)
+
+        return next_observations, rewards, dones, infos
+
+    def build_text_obs(self, text_obs: List[str], init: bool = False) -> List[str]:
+        """
+        This function builds the text observation for the agent.
+        """
+        postprocess_text_obs = []
+        if not init and self.config.env.history_length > 0:
+            memory_contexts, valid_lens = self.memory.fetch(
+                    self.config.env.history_length,
+                    obs_key="text_obs",
+                    action_key="action")
+
+        for i in range(len(text_obs)):
+            if init or self.config.env.history_length <= 0:
+                obs = BABYAI_TEMPLATE_NO_HIS.format(
+                    mission=self.missions[i],
+                    current_observation=text_obs[i],
+                )
+            else:
+                obs = BABYAI_TEMPLATE.format(
+                    mission=self.missions[i],
+                    step_count=len(self.memory[i]),
+                    history_length=valid_lens[i],
+                    action_history=memory_contexts[i],
+                    current_step=len(self.memory[i]) + 1,
+                    current_observation=text_obs[i],
+                )
+            postprocess_text_obs.append(obs)
+        return postprocess_text_obs
+
+
 class GymCardEnvironmentManager(EnvironmentManagerBase):
     def __init__(self, envs, projection_f, config):
         super().__init__(envs, projection_f, config)
@@ -660,6 +724,18 @@ def make_envs(config):
         projection_f = partial(sokoban_projection)
         envs = SokobanEnvironmentManager(_envs, projection_f, config)
         val_envs = SokobanEnvironmentManager(_val_envs, projection_f, config)
+        return envs, val_envs
+    elif "babyai" in config.env.env_name.lower():
+        from agent_system.environments.env_package.babyai import build_babyai_envs, babyai_projection
+        env_kwargs = {
+            'env_id': config.env.babyai.env_id,
+        }
+        _envs = build_babyai_envs(seed=config.env.seed, env_num=config.data.train_batch_size, group_n=group_n, is_train=True, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker)
+        _val_envs = build_babyai_envs(seed=config.env.seed + 1000, env_num=config.data.val_batch_size, group_n=1, is_train=False, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker)
+
+        projection_f = partial(babyai_projection)
+        envs = BabyAIEnvironmentManager(_envs, projection_f, config)
+        val_envs = BabyAIEnvironmentManager(_val_envs, projection_f, config)
         return envs, val_envs
     elif "webshop" in config.env.env_name.lower():
         from agent_system.environments.env_package.webshop import build_webshop_envs, webshop_projection
