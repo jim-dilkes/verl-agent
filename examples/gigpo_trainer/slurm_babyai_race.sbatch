@@ -54,7 +54,8 @@ else
     VAL_BEFORE=False
 fi
 
-bash "$RUN_SCRIPT" \
+# First positional arg is the ENGINE ($1 in the run script) — overrides follow.
+bash "$RUN_SCRIPT" vllm \
     trainer.total_training_steps=$STEPS \
     trainer.save_freq=-1 \
     trainer.test_freq=-1 \
