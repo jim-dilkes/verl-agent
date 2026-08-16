@@ -14,7 +14,8 @@
 #SBATCH --gres=gpu:4
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=300G
+# no --mem: a cgroup cap makes Ray's /dev/shm object store (3.5T shm here)
+# blow the job's memory limit — the proven DICE jobs also set no --mem.
 #SBATCH --time=01:30:00
 #SBATCH --output=/home/u6re/jdilkes.u6re/frameworks-spike/race-stock-%j.out
 #SBATCH --error=/home/u6re/jdilkes.u6re/frameworks-spike/race-stock-%j.err
