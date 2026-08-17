@@ -2,6 +2,15 @@ set -x
 ENGINE=${1:-vllm}
 [ "$#" -gt 0 ] && shift
 
+# Offline clusters: verl 0.3.1's loader calls the HF Hub API even for cached
+# models. Resolve the local snapshot path and pass it instead of the repo id.
+MODEL_ID="Qwen/Qwen3-1.7B"
+MODEL_PATH_RESOLVED="$MODEL_ID"
+if [ "${HF_HUB_OFFLINE:-0}" = "1" ]; then
+    SNAP_ROOT="${HF_HOME:-$HOME/.cache/huggingface}/hub/models--${MODEL_ID//\//--}/snapshots"
+    for d in "$SNAP_ROOT"/*/; do MODEL_PATH_RESOLVED="${d%/}"; break; done
+fi
+
 num_cpus_per_env_worker=0.1 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
 
 train_data_size=16
@@ -27,7 +36,7 @@ python3 -m verl.trainer.main_ppo \
     data.truncation='error' \
     data.return_raw_chat=True \
     +data.apply_chat_template_kwargs.enable_thinking=False \
-    actor_rollout_ref.model.path=Qwen/Qwen3-1.7B \
+    actor_rollout_ref.model.path=$MODEL_PATH_RESOLVED \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=64 \
