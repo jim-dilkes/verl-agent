@@ -35,6 +35,33 @@ mkdir -p "$TRITON_CACHE_DIR"
 export WANDB_MODE="${WANDB_MODE:-offline}"
 export WANDB_DIR="$HOME/frameworks-spike/wandb"
 
+# Pre-started Ray head + raylet log capture (see port-arm sbatch for rationale:
+# internal ray.init() raylet dies on these nodes; DICE jobs pre-start and connect).
+export RAY_TMPDIR="$TMPDIR/ray"
+mkdir -p "$RAY_TMPDIR"
+SHM_AVAIL_KB=$(df --output=avail /dev/shm 2>/dev/null | tail -1 | tr -d ' ')
+if [ -n "$SHM_AVAIL_KB" ] && [ "$SHM_AVAIL_KB" -gt 1048576 ]; then
+    export RAY_OBJECT_STORE_MEMORY=$(( SHM_AVAIL_KB * 1024 * 80 / 100 ))
+else
+    export RAY_OBJECT_STORE_MEMORY=$((1 * 1024 * 1024 * 1024))
+fi
+export RAY_memory_monitor_refresh_ms=0
+dump_raylet() {
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "=== RAYLET LOGS (exit $rc) ==="
+        tail -60 "$RAY_TMPDIR"/session_latest/logs/raylet.err 2>/dev/null
+        tail -30 "$RAY_TMPDIR"/session_latest/logs/raylet.out 2>/dev/null
+        tail -30 "$RAY_TMPDIR"/session_latest/logs/gcs_server.err 2>/dev/null
+    fi
+    ray stop --force >/dev/null 2>&1 || true
+}
+trap dump_raylet EXIT
+ray start --head --port=6379 --num-gpus=4 --num-cpus="${SLURM_CPUS_PER_TASK:-32}" \
+    --object-store-memory="$RAY_OBJECT_STORE_MEMORY" --temp-dir="$RAY_TMPDIR" \
+    --include-dashboard=false --disable-usage-stats
+export RAY_ADDRESS="127.0.0.1:6379"
+
 # ---- MATCHED CONTRACT (must mirror the port-arm sbatch) ------------------- #
 # episodes/optimizer step: 128 (train_data_size=16 x group_size=8)
 # env: BabyAI-GoToRedBallGrey-v0, 20 env-step cap, history window 20
